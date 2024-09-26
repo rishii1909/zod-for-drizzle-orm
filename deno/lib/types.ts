@@ -574,6 +574,12 @@ export type ZodStringCheck =
   | { kind: "base64"; message?: string }
   | EnumCheck;
 
+type ZodStringLikeFirstPartyTypeKinds =
+  | ZodFirstPartyTypeKind.ZodString
+  | ZodFirstPartyTypeKind.ZdzText
+  | ZodFirstPartyTypeKind.ZdzVarchar
+  | ZodFirstPartyTypeKind.ZdzChar;
+
 export interface ZodStringBaseDef<Kind extends ZodStringLikeFirstPartyTypeKinds>
   extends ZodTypeDef {
   checks: ZodStringCheck[];
@@ -585,21 +591,79 @@ export interface ZodStringDef
   extends ZodStringBaseDef<ZodFirstPartyTypeKind.ZodString> {
   typeName: ZodFirstPartyTypeKind.ZodString;
 }
-
-export type ZodTextCheck = ZodStringCheck;
 export interface ZdzTextDef
   extends ZodStringBaseDef<ZodFirstPartyTypeKind.ZdzText> {
   typeName: ZodFirstPartyTypeKind.ZdzText;
 }
+export interface ZdzVarcharDef
+  extends ZodStringBaseDef<ZodFirstPartyTypeKind.ZdzVarchar> {
+  typeName: ZodFirstPartyTypeKind.ZdzVarchar;
+}
+export interface ZdzCharDef
+  extends ZodStringBaseDef<ZodFirstPartyTypeKind.ZdzChar> {
+  typeName: ZodFirstPartyTypeKind.ZdzChar;
+}
+export type ZodStringLikeDefs =
+  | ZodStringDef
+  | ZdzTextDef
+  | ZdzVarcharDef
+  | ZdzCharDef;
 
-export type ZodStringLikeDefs = ZodStringDef | ZdzTextDef;
+export type ZdzTextCheck = ZodStringCheck;
+export type ZdzVarcharCheck = ZodStringCheck;
+export type ZdzCharCheck = ZodStringCheck;
 
-export type ZodStringLikeChecks = ZodStringCheck | ZodTextCheck;
-type ZodStringLikeFirstPartyTypeKinds =
-  | ZodFirstPartyTypeKind.ZodString
-  | ZodFirstPartyTypeKind.ZdzText;
+export type ZodStringLikeChecks =
+  | ZodStringCheck
+  | ZdzTextCheck
+  | ZdzVarcharCheck;
 
-type ZodStringLikeClasses = ZodString | ZdzText;
+type ZodStringLikeAdditionalParams = {
+  enum?: string[];
+  coerce?: boolean;
+};
+
+type ZodStringLikeBaseCreateParams<
+  ZodStringLikeFirstPartyTypeKind extends string
+> = RawCreateParams &
+  ZodStringLikeAdditionalParams & {
+    kind?: ZodStringLikeFirstPartyTypeKind;
+  };
+
+type ZodStringLikeCreateParams =
+  | ZodStringCreateParams
+  | ZdzTextCreateParams
+  | ZdzVarcharCreateParams;
+
+interface ZodStringCreateParams
+  extends ZodStringLikeBaseCreateParams<ZodFirstPartyTypeKind.ZodString>,
+    ZodStringLikeAdditionalParams {}
+
+interface ZdzTextCreateParams
+  extends ZodStringLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzText>,
+    ZodStringLikeAdditionalParams {}
+
+interface ZdzVarcharCreateParams
+  extends ZodStringLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzVarchar>,
+    ZodStringLikeAdditionalParams {}
+
+type ZodStringLikeClasses = ZodString | ZdzText | ZdzVarchar | ZdzChar;
+
+const isStringLikeDef = <ZdzTargetDef extends ZodStringLikeDefs>(
+  zodStringKind: ZodStringLikeFirstPartyTypeKinds,
+  def?: ZodStringLikeDefs
+): def is ZdzTargetDef => {
+  return def?.typeName === zodStringKind;
+};
+
+const isStringLikeCreateParams = <
+  ZdzTargetCreateParams extends ZodStringLikeCreateParams
+>(
+  zodStringKind: ZodStringLikeFirstPartyTypeKinds,
+  params?: ZodStringLikeBaseCreateParams<ZodStringLikeFirstPartyTypeKinds>
+): params is ZdzTargetCreateParams => {
+  return params?.kind === zodStringKind;
+};
 
 const cuidRegex = /^c[^\s-]{8,}$/i;
 const cuid2Regex = /^[0-9a-z]+$/;
@@ -704,16 +768,6 @@ export class ZodStringBase<
 > extends ZodType<string, ZodStringLikeDef, string> {
   _parse(input: ParseInput): ParseReturnType<string> {
     if (this._def.coerce) input.data = getCoercedString(input.data);
-    // Check for enum
-    if (this._def.enum && !this._def.enum.includes(input.data)) {
-      const ctx = this._getOrReturnCtx(input);
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.string,
-        received: ctx.parsedType,
-      });
-      return INVALID;
-    }
     const parsedType = this._getType(input);
 
     if (parsedType !== ZodParsedType.string) {
@@ -743,15 +797,34 @@ export class ZodStringBase<
   }
 
   _addCheck(check: ZodStringLikeChecks): ZodStringLikeClasses {
-    if (isZdzTextDef(this._def))
+    if (isStringLikeDef<ZdzTextDef>(ZodFirstPartyTypeKind.ZdzText, this._def))
       return new ZdzText({
         ...this._def,
         checks: [...this._def.checks, check],
       });
 
-    if (isZodStringDef(this._def))
+    if (
+      isStringLikeDef<ZodStringDef>(ZodFirstPartyTypeKind.ZodString, this._def)
+    )
       return new ZodString({
-        ...(<ZodStringDef>this._def),
+        ...this._def,
+        checks: [...this._def.checks, check],
+      });
+
+    if (
+      isStringLikeDef<ZdzVarcharDef>(
+        ZodFirstPartyTypeKind.ZdzVarchar,
+        this._def
+      )
+    )
+      return new ZdzVarchar({
+        ...this._def,
+        checks: [...this._def.checks, check],
+      });
+
+    if (isStringLikeDef<ZdzCharDef>(ZodFirstPartyTypeKind.ZdzChar, this._def))
+      return new ZdzChar({
+        ...this._def,
         checks: [...this._def.checks, check],
       });
 
@@ -916,6 +989,14 @@ export class ZodStringBase<
     });
   }
 
+  enum(value: string[], message?: errorUtil.ErrMessage) {
+    return this._addCheck({
+      kind: "enum",
+      value,
+      ...errorUtil.errToObj(message),
+    });
+  }
+
   /**
    * @deprecated Use z.string().min(1) instead.
    * @see {@link ZodString.min}
@@ -942,14 +1023,6 @@ export class ZodStringBase<
     return new ZodStringBase({
       ...this._def,
       checks: [...this._def.checks, { kind: "toUpperCase" }],
-    });
-  }
-
-  enum(value: string[], message?: errorUtil.ErrMessage) {
-    return this._addCheck({
-      kind: "enum",
-      value,
-      ...errorUtil.errToObj(message),
     });
   }
 
@@ -1023,10 +1096,30 @@ export class ZodStringBase<
     return max;
   }
 
-  static create = (
-    params?: ZodStringLikeCreateParams
+  static create = <T extends ZodStringLikeFirstPartyTypeKinds>(
+    params?: ZodStringLikeBaseCreateParams<T>
   ): ZodStringLikeClasses => {
-    if (isZdzTextCreateParams(params)) {
+    if (
+      isStringLikeCreateParams<ZodStringCreateParams>(
+        ZodFirstPartyTypeKind.ZodString,
+        params
+      )
+    ) {
+      return new ZodString({
+        checks: [],
+        typeName: ZodFirstPartyTypeKind.ZodString,
+        coerce: params.coerce ?? false,
+        enum: params.enum ?? [],
+        ...processCreateParams(params),
+      });
+    }
+
+    if (
+      isStringLikeCreateParams<ZdzTextCreateParams>(
+        ZodFirstPartyTypeKind.ZdzText,
+        params
+      )
+    ) {
       return new ZdzText({
         checks: [],
         typeName: ZodFirstPartyTypeKind.ZdzText,
@@ -1036,12 +1129,17 @@ export class ZodStringBase<
       });
     }
 
-    if (isZodStringCreateParams(params)) {
-      return new ZodString({
+    if (
+      isStringLikeCreateParams<ZdzVarcharCreateParams>(
+        ZodFirstPartyTypeKind.ZdzVarchar,
+        params
+      )
+    ) {
+      return new ZdzVarchar({
         checks: [],
-        typeName: ZodFirstPartyTypeKind.ZodString,
-        coerce: params.coerce ?? false,
+        typeName: ZodFirstPartyTypeKind.ZdzVarchar,
         enum: params.enum ?? [],
+        coerce: params.coerce ?? false,
         ...processCreateParams(params),
       });
     }
@@ -1057,120 +1155,13 @@ export class ZodStringBase<
     });
   };
 }
+export class ZodString extends ZodStringBase<ZodStringDef> {}
+export class ZdzText extends ZodStringBase<ZdzTextDef> {}
+export class ZdzChar extends ZodStringBase<ZdzCharDef> {}
+export class ZdzVarchar extends ZodStringBase<ZdzVarcharDef> {}
 
-type ZodStringLikeBaseCreateParams<
-  ZodStringLikeFirstPartyTypeKind extends string
-> = RawCreateParams & {
-  kind?: ZodStringLikeFirstPartyTypeKind;
-  enum?: string[];
-};
+// Zod Number module
 
-type ZodStringLikeCreateParams = ZodStringCreateParams | ZdzTextCreateParams;
-interface ZodStringCreateParams
-  extends ZodStringLikeBaseCreateParams<ZodFirstPartyTypeKind.ZodString> {
-  coerce?: true;
-}
-
-const isZodStringCreateParams = (
-  params?: ZodStringLikeBaseCreateParams<ZodStringLikeFirstPartyTypeKinds>
-): params is ZodStringCreateParams => {
-  return params?.kind === ZodFirstPartyTypeKind.ZodString;
-};
-
-const isZodStringDef = (def?: ZodStringLikeDefs): def is ZodStringDef => {
-  return def?.typeName === ZodFirstPartyTypeKind.ZodString;
-};
-
-export class ZodString extends ZodStringBase<ZodStringDef> {
-  _parse(input: ParseInput): ParseReturnType<string> {
-    if (this._def.coerce) input.data = getCoercedString(input.data);
-    const parsedType = this._getType(input);
-
-    if (parsedType !== ZodParsedType.string) {
-      const ctx = this._getOrReturnCtx(input);
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.string,
-        received: ctx.parsedType,
-      });
-      return INVALID;
-    }
-    const { status } = performStringChecks(this, input);
-
-    return { status: status.value, value: input.data };
-  }
-}
-
-/////////////////////////////////////////
-/////////////////////////////////////////
-//////////                     //////////
-//////////      ZdzText        //////////
-//////////                     //////////
-/////////////////////////////////////////
-/////////////////////////////////////////
-interface ZdzTextCreateParams
-  extends ZodStringLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzText> {
-  enum?: string[];
-  coerce?: boolean;
-}
-
-const isZdzTextCreateParams = (
-  params?: ZodStringLikeBaseCreateParams<ZodStringLikeFirstPartyTypeKinds>
-): params is ZdzTextCreateParams => {
-  return params?.kind === ZodFirstPartyTypeKind.ZdzText;
-};
-
-const isZdzTextDef = (def?: ZodStringLikeDefs): def is ZdzTextDef => {
-  return def?.typeName === ZodFirstPartyTypeKind.ZdzText;
-};
-
-export function bindMethodsFromClass<T extends ZodStringLikeClasses>(
-  sourceInstance: T,
-  targetInstance: T
-) {
-  const methodNames = Object.getOwnPropertyNames(
-    Object.getPrototypeOf(sourceInstance)
-  );
-
-  for (const methodName of methodNames) {
-    if (methodName !== "constructor") {
-      const method = (sourceInstance as any)[methodName];
-      // Only bind if the method is a function
-      if (typeof method === "function") {
-        (targetInstance as any)[methodName] = method.bind(sourceInstance);
-      }
-    }
-  }
-}
-
-export class ZdzText extends ZodStringBase<ZdzTextDef> {
-  _parse(input: ParseInput): ParseReturnType<string> {
-    if (this._def.coerce) input.data = getCoercedString(input.data);
-    const parsedType = this._getType(input);
-
-    if (parsedType !== ZodParsedType.string) {
-      const ctx = this._getOrReturnCtx(input);
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.string,
-        received: ctx.parsedType,
-      });
-      return INVALID;
-    }
-
-    const { status } = performStringChecks(this, input);
-
-    return { status: status.value, value: input.data };
-  }
-}
-
-/////////////////////////////////////////
-/////////////////////////////////////////
-//////////                     //////////
-//////////      ZodNumber      //////////
-//////////                     //////////
-/////////////////////////////////////////
-/////////////////////////////////////////
 export type ZodNumberCheck =
   | { kind: "min"; value: number; inclusive: boolean; message?: string }
   | { kind: "max"; value: number; inclusive: boolean; message?: string }
@@ -1188,13 +1179,174 @@ function floatSafeRemainder(val: number, step: number) {
   return (valInt % stepInt) / Math.pow(10, decCount);
 }
 
-export interface ZodNumberDef extends ZodTypeDef {
+type ZodNumberLikeFirstPartyTypeKinds =
+  | ZodFirstPartyTypeKind.ZodNumber
+  | ZodFirstPartyTypeKind.ZdzInt
+  | ZodFirstPartyTypeKind.ZdzSmallInt
+  | ZodFirstPartyTypeKind.ZdzBigInt
+  | ZodFirstPartyTypeKind.ZdzSerial
+  | ZodFirstPartyTypeKind.ZdzSmallSerial
+  | ZodFirstPartyTypeKind.ZdzBigSerial
+  | ZodFirstPartyTypeKind.ZdzDecimal
+  | ZodFirstPartyTypeKind.ZdzReal
+  | ZodFirstPartyTypeKind.ZdzDoublePrecision;
+
+export interface ZodNumberBaseDef<Kind extends ZodNumberLikeFirstPartyTypeKinds>
+  extends ZodTypeDef {
   checks: ZodNumberCheck[];
-  typeName: ZodFirstPartyTypeKind.ZodNumber;
-  coerce: boolean;
+  typeName: Kind;
+  coerce?: boolean;
 }
 
-export class ZodNumber extends ZodType<number, ZodNumberDef, number> {
+export interface ZodNumberDef
+  extends ZodNumberBaseDef<ZodFirstPartyTypeKind.ZodNumber> {
+  typeName: ZodFirstPartyTypeKind.ZodNumber;
+}
+export interface ZdzIntDef
+  extends ZodNumberBaseDef<ZodFirstPartyTypeKind.ZdzInt> {
+  typeName: ZodFirstPartyTypeKind.ZdzInt;
+}
+export interface ZdzSmallIntDef
+  extends ZodNumberBaseDef<ZodFirstPartyTypeKind.ZdzSmallInt> {
+  typeName: ZodFirstPartyTypeKind.ZdzSmallInt;
+}
+export interface ZdzBigIntDef
+  extends ZodNumberBaseDef<ZodFirstPartyTypeKind.ZdzBigInt> {
+  typeName: ZodFirstPartyTypeKind.ZdzBigInt;
+}
+export interface ZdzSerialDef
+  extends ZodNumberBaseDef<ZodFirstPartyTypeKind.ZdzSerial> {
+  typeName: ZodFirstPartyTypeKind.ZdzSerial;
+}
+export interface ZdzSmallSerialDef
+  extends ZodNumberBaseDef<ZodFirstPartyTypeKind.ZdzSmallSerial> {
+  typeName: ZodFirstPartyTypeKind.ZdzSmallSerial;
+}
+export interface ZdzBigSerialDef
+  extends ZodNumberBaseDef<ZodFirstPartyTypeKind.ZdzBigSerial> {
+  typeName: ZodFirstPartyTypeKind.ZdzBigSerial;
+}
+export interface ZdzDecimalDef
+  extends ZodNumberBaseDef<ZodFirstPartyTypeKind.ZdzDecimal> {
+  typeName: ZodFirstPartyTypeKind.ZdzDecimal;
+}
+export interface ZdzRealDef
+  extends ZodNumberBaseDef<ZodFirstPartyTypeKind.ZdzReal> {
+  typeName: ZodFirstPartyTypeKind.ZdzReal;
+}
+export interface ZdzDoublePrecisionDef
+  extends ZodNumberBaseDef<ZodFirstPartyTypeKind.ZdzDoublePrecision> {
+  typeName: ZodFirstPartyTypeKind.ZdzDoublePrecision;
+}
+export type ZodNumberLikeDefs =
+  | ZodNumberDef
+  | ZdzIntDef
+  | ZdzSmallIntDef
+  | ZdzBigIntDef
+  | ZdzSerialDef
+  | ZdzSmallSerialDef
+  | ZdzBigSerialDef
+  | ZdzDecimalDef
+  | ZdzRealDef
+  | ZdzDoublePrecisionDef;
+
+export type ZdzIntCheck = ZodNumberCheck;
+export type ZdZSmallIntCheck = ZodNumberCheck;
+export type ZdzBigIntCheck = ZodNumberCheck;
+export type ZdzSerialCheck = ZodNumberCheck;
+export type ZdzSmallSerialCheck = ZodNumberCheck;
+export type ZdzBigSerialCheck = ZodNumberCheck;
+export type ZdzDecimalCheck = ZodNumberCheck;
+export type ZdzRealCheck = ZodNumberCheck;
+export type ZdzDoublePrecisionCheck = ZodNumberCheck;
+
+export type ZodNumberLikeChecks =
+  | ZodNumberCheck
+  | ZdzIntCheck
+  | ZdZSmallIntCheck
+  | ZdzBigIntCheck
+  | ZdzSerialCheck
+  | ZdzSmallSerialCheck
+  | ZdzBigSerialCheck
+  | ZdzDecimalCheck
+  | ZdzRealCheck
+  | ZdzDoublePrecisionCheck;
+
+type ZodNumberLikeAdditionalParams = {
+  coerce?: boolean;
+};
+
+type ZodNumberLikeBaseCreateParams<
+  ZodNumberLikeFirstPartyTypeKinds extends string
+> = RawCreateParams &
+  ZodNumberLikeAdditionalParams & {
+    kind: ZodNumberLikeFirstPartyTypeKinds;
+  };
+
+interface ZodNumberCreateParams
+  extends ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZodNumber> {}
+interface ZdzIntCreateParams
+  extends ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzInt> {}
+interface ZdZSmallIntCreateParams
+  extends ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzSmallInt> {}
+interface ZdzBigIntCreateParams
+  extends ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzBigInt> {}
+interface ZdzSerialCreateParams
+  extends ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzSerial> {}
+interface ZdzSmallSerialCreateParams
+  extends ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzSmallSerial> {}
+interface ZdzBigSerialCreateParams
+  extends ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzBigSerial> {}
+interface ZdzDecimalCreateParams
+  extends ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzDecimal> {}
+interface ZdzRealCreateParams
+  extends ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzReal> {}
+interface ZdzDoublePrecisionCreateParams
+  extends ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzDoublePrecision> {}
+
+type ZodNumberLikeCreateParams =
+  | ZodNumberCreateParams
+  | ZdzIntCreateParams
+  | ZdZSmallIntCreateParams
+  | ZdzBigIntCreateParams
+  | ZdzSerialCreateParams
+  | ZdzSmallSerialCreateParams
+  | ZdzBigSerialCreateParams
+  | ZdzDecimalCreateParams
+  | ZdzRealCreateParams
+  | ZdzDoublePrecisionCreateParams;
+
+type ZodNumberLikeClasses =
+  | ZodNumber
+  | ZdzInt
+  | ZdzSmallInt
+  | ZdzBigInt
+  | ZdzSerial
+  | ZdzSmallSerial
+  | ZdzBigSerial
+  | ZdzDecimal
+  | ZdzReal
+  | ZdzDoublePrecision;
+
+const isNumberLikeDef = <ZdzTargetDef extends ZodNumberLikeDefs>(
+  zodNumberKind: ZodNumberLikeFirstPartyTypeKinds,
+  def?: ZodNumberLikeDefs
+): def is ZdzTargetDef => {
+  return def?.typeName === zodNumberKind;
+};
+
+const isNumberLikeCreateParams = <
+  ZdzTargetCreateParams extends ZodNumberLikeCreateParams
+>(
+  zodNumberKind: ZodNumberLikeFirstPartyTypeKinds,
+  params?: ZodNumberLikeBaseCreateParams<ZodNumberLikeFirstPartyTypeKinds>
+): params is ZdzTargetCreateParams => {
+  return params?.kind === zodNumberKind;
+};
+
+export class ZodNumberBase<
+  ZodNumberLikeDef extends ZodNumberLikeDefs
+> extends ZodType<number, ZodNumberLikeDef, number> {
   _parse(input: ParseInput): ParseReturnType<number> {
     if (this._def.coerce) {
       input.data = Number(input.data);
@@ -1284,13 +1436,133 @@ export class ZodNumber extends ZodType<number, ZodNumberDef, number> {
     return { status: status.value, value: input.data };
   }
 
-  static create = (
-    params?: RawCreateParams & { coerce?: boolean }
-  ): ZodNumber => {
+  static create = <T extends ZodNumberLikeFirstPartyTypeKinds>(
+    params?: ZodNumberLikeBaseCreateParams<T>
+  ): ZodNumberLikeClasses => {
+    if (
+      isNumberLikeCreateParams<ZodNumberCreateParams>(
+        ZodFirstPartyTypeKind.ZodNumber,
+        params
+      )
+    ) {
+      return new ZodNumber({
+        checks: [],
+        typeName: ZodFirstPartyTypeKind.ZodNumber,
+        ...processCreateParams(params),
+      });
+    }
+    if (
+      isNumberLikeCreateParams<ZdzIntCreateParams>(
+        ZodFirstPartyTypeKind.ZdzInt,
+        params
+      )
+    ) {
+      return new ZdzInt({
+        checks: [],
+        typeName: ZodFirstPartyTypeKind.ZdzInt,
+        ...processCreateParams(params),
+      });
+    }
+    if (
+      isNumberLikeCreateParams<ZdZSmallIntCreateParams>(
+        ZodFirstPartyTypeKind.ZdzSmallInt,
+        params
+      )
+    ) {
+      return new ZdzSmallInt({
+        checks: [],
+        typeName: ZodFirstPartyTypeKind.ZdzSmallInt,
+        ...processCreateParams(params),
+      });
+    }
+    if (
+      isNumberLikeCreateParams<ZdzBigIntCreateParams>(
+        ZodFirstPartyTypeKind.ZdzBigInt,
+        params
+      )
+    ) {
+      return new ZdzBigInt({
+        checks: [],
+        typeName: ZodFirstPartyTypeKind.ZdzBigInt,
+        ...processCreateParams(params),
+      });
+    }
+    if (
+      isNumberLikeCreateParams<ZdzSerialCreateParams>(
+        ZodFirstPartyTypeKind.ZdzSerial,
+        params
+      )
+    ) {
+      return new ZdzSerial({
+        checks: [],
+        typeName: ZodFirstPartyTypeKind.ZdzSerial,
+        ...processCreateParams(params),
+      });
+    }
+    if (
+      isNumberLikeCreateParams<ZdzSmallSerialCreateParams>(
+        ZodFirstPartyTypeKind.ZdzSmallSerial,
+        params
+      )
+    ) {
+      return new ZdzSmallSerial({
+        checks: [],
+        typeName: ZodFirstPartyTypeKind.ZdzSmallSerial,
+        ...processCreateParams(params),
+      });
+    }
+    if (
+      isNumberLikeCreateParams<ZdzBigSerialCreateParams>(
+        ZodFirstPartyTypeKind.ZdzBigSerial,
+        params
+      )
+    ) {
+      return new ZdzBigSerial({
+        checks: [],
+        typeName: ZodFirstPartyTypeKind.ZdzBigSerial,
+        ...processCreateParams(params),
+      });
+    }
+    if (
+      isNumberLikeCreateParams<ZdzDecimalCreateParams>(
+        ZodFirstPartyTypeKind.ZdzDecimal,
+        params
+      )
+    ) {
+      return new ZdzDecimal({
+        checks: [],
+        typeName: ZodFirstPartyTypeKind.ZdzDecimal,
+        ...processCreateParams(params),
+      });
+    }
+    if (
+      isNumberLikeCreateParams<ZdzRealCreateParams>(
+        ZodFirstPartyTypeKind.ZdzReal,
+        params
+      )
+    ) {
+      return new ZdzReal({
+        checks: [],
+        typeName: ZodFirstPartyTypeKind.ZdzReal,
+        ...processCreateParams(params),
+      });
+    }
+    if (
+      isNumberLikeCreateParams<ZdzDoublePrecisionCreateParams>(
+        ZodFirstPartyTypeKind.ZdzDoublePrecision,
+        params
+      )
+    ) {
+      return new ZdzDoublePrecision({
+        checks: [],
+        typeName: ZodFirstPartyTypeKind.ZdzDoublePrecision,
+        ...processCreateParams(params),
+      });
+    }
+
     return new ZodNumber({
       checks: [],
       typeName: ZodFirstPartyTypeKind.ZodNumber,
-      coerce: params?.coerce || false,
       ...processCreateParams(params),
     });
   };
@@ -1319,7 +1591,7 @@ export class ZodNumber extends ZodType<number, ZodNumberDef, number> {
     inclusive: boolean,
     message?: string
   ) {
-    return new ZodNumber({
+    return new ZodNumberBase({
       ...this._def,
       checks: [
         ...this._def.checks,
@@ -1333,10 +1605,104 @@ export class ZodNumber extends ZodType<number, ZodNumberDef, number> {
     });
   }
 
-  _addCheck(check: ZodNumberCheck) {
+  _addCheck(check: ZodNumberLikeChecks): ZodNumberLikeClasses {
+    if (isNumberLikeDef<ZdzIntDef>(ZodFirstPartyTypeKind.ZdzInt, this._def)) {
+      return new ZdzInt({
+        ...this._def,
+        checks: [...this._def.checks, check],
+      });
+    }
+
+    if (
+      isNumberLikeDef<ZdzSmallIntDef>(
+        ZodFirstPartyTypeKind.ZdzSmallInt,
+        this._def
+      )
+    ) {
+      return new ZdzSmallInt({
+        ...this._def,
+        checks: [...this._def.checks, check],
+      });
+    }
+
+    if (
+      isNumberLikeDef<ZdzBigIntDef>(ZodFirstPartyTypeKind.ZdzBigInt, this._def)
+    ) {
+      return new ZdzBigInt({
+        ...this._def,
+        checks: [...this._def.checks, check],
+      });
+    }
+
+    if (
+      isNumberLikeDef<ZdzSerialDef>(ZodFirstPartyTypeKind.ZdzSerial, this._def)
+    ) {
+      return new ZdzSerial({
+        ...this._def,
+        checks: [...this._def.checks, check],
+      });
+    }
+
+    if (
+      isNumberLikeDef<ZdzSmallSerialDef>(
+        ZodFirstPartyTypeKind.ZdzSmallSerial,
+        this._def
+      )
+    ) {
+      return new ZdzSmallSerial({
+        ...this._def,
+        checks: [...this._def.checks, check],
+      });
+    }
+
+    if (
+      isNumberLikeDef<ZdzBigSerialDef>(
+        ZodFirstPartyTypeKind.ZdzBigSerial,
+        this._def
+      )
+    ) {
+      return new ZdzBigSerial({
+        ...this._def,
+        checks: [...this._def.checks, check],
+      });
+    }
+
+    if (
+      isNumberLikeDef<ZdzDecimalDef>(
+        ZodFirstPartyTypeKind.ZdzDecimal,
+        this._def
+      )
+    ) {
+      return new ZdzDecimal({
+        ...this._def,
+        checks: [...this._def.checks, check],
+      });
+    }
+
+    if (isNumberLikeDef<ZdzRealDef>(ZodFirstPartyTypeKind.ZdzReal, this._def)) {
+      return new ZdzReal({
+        ...this._def,
+        checks: [...this._def.checks, check],
+      });
+    }
+
+    if (
+      isNumberLikeDef<ZdzDoublePrecisionDef>(
+        ZodFirstPartyTypeKind.ZdzDoublePrecision,
+        this._def
+      )
+    ) {
+      return new ZdzDoublePrecision({
+        ...this._def,
+        checks: [...this._def.checks, check],
+      });
+    }
+
+    const zodNumberDef = <ZodNumberDef>this._def;
+
     return new ZodNumber({
-      ...this._def,
-      checks: [...this._def.checks, check],
+      ...zodNumberDef,
+      checks: [...zodNumberDef.checks, check],
     });
   }
 
@@ -1460,6 +1826,17 @@ export class ZodNumber extends ZodType<number, ZodNumberDef, number> {
     return Number.isFinite(min) && Number.isFinite(max);
   }
 }
+
+export class ZodNumber extends ZodNumberBase<ZodNumberDef> {}
+export class ZdzInt extends ZodNumberBase<ZdzIntDef> {}
+export class ZdzSmallInt extends ZodNumberBase<ZdzSmallIntDef> {}
+export class ZdzBigInt extends ZodNumberBase<ZdzBigIntDef> {}
+export class ZdzSerial extends ZodNumberBase<ZdzSerialDef> {}
+export class ZdzSmallSerial extends ZodNumberBase<ZdzSmallSerialDef> {}
+export class ZdzBigSerial extends ZodNumberBase<ZdzBigSerialDef> {}
+export class ZdzDecimal extends ZodNumberBase<ZdzDecimalDef> {}
+export class ZdzReal extends ZodNumberBase<ZdzRealDef> {}
+export class ZdzDoublePrecision extends ZodNumberBase<ZdzDoublePrecisionDef> {}
 
 /////////////////////////////////////////
 /////////////////////////////////////////
@@ -5047,8 +5424,6 @@ export const late = {
   object: ZodObject.lazycreate,
 };
 
-// Refactored functions
-
 const performStringChecks = (
   baseInstance: ZodStringBase<ZodStringLikeDefs>,
   input: ParseInput
@@ -5309,14 +5684,16 @@ const performStringChecks = (
         status.dirty();
       }
     } else if (check.kind === "enum") {
-      console.log("here");
-      ctx = baseInstance._getOrReturnCtx(input, ctx);
-      addIssueToContext(ctx, {
-        validation: "enum",
-        code: ZodIssueCode.invalid_string,
-        message: check.message,
-      });
-      status.dirty();
+      if (!check.value.includes(input.data)) {
+        ctx = baseInstance._getOrReturnCtx(input, ctx);
+        addIssueToContext(ctx, {
+          options: baseInstance._def.enum,
+          code: ZodIssueCode.invalid_enum_value,
+          received: input.data,
+          message: check.message,
+        });
+        status.dirty();
+      }
     } else {
       util.assertNever(check);
     }
@@ -5327,7 +5704,6 @@ const performStringChecks = (
 
 export enum ZodFirstPartyTypeKind {
   ZodString = "ZodString",
-  ZodStringBase = "ZodStringBase",
   ZodNumber = "ZodNumber",
   ZodNaN = "ZodNaN",
   ZodBigInt = "ZodBigInt",
@@ -5364,8 +5740,74 @@ export enum ZodFirstPartyTypeKind {
   ZodPipeline = "ZodPipeline",
   ZodReadonly = "ZodReadonly",
   // Zdz FirstPartyKinds
+  //
+  // String-like kinds
   ZdzText = "ZdzText",
+  ZdzVarchar = "ZdzVarchar",
+  ZdzChar = "ZdzChar",
+  //
+  // Number-like kinds
+  ZdzInt = "ZdzInt",
+  ZdzSmallInt = "ZdzSmallInt",
+  ZdzBigInt = "ZdzBigInt",
+  ZdzSerial = "ZdzSerial",
+  ZdzSmallSerial = "ZdzSmallSerial",
+  ZdzBigSerial = "ZdzBigSerial",
+  ZdzDecimal = "ZdzDecimal",
+  ZdzReal = "ZdzReal",
+  ZdzDoublePrecision = "ZdzDoublePrecision",
+  //
+  //
 }
+
+export type ZdzKinds =
+  | ZodFirstPartyTypeKind.ZdzText
+  | ZodFirstPartyTypeKind.ZdzVarchar
+  | ZodFirstPartyTypeKind.ZdzChar
+  | ZodFirstPartyTypeKind.ZdzInt
+  | ZodFirstPartyTypeKind.ZdzSmallInt
+  | ZodFirstPartyTypeKind.ZdzBigInt
+  | ZodFirstPartyTypeKind.ZdzSerial
+  | ZodFirstPartyTypeKind.ZdzSmallSerial
+  | ZodFirstPartyTypeKind.ZdzBigSerial
+  | ZodFirstPartyTypeKind.ZdzDecimal
+  | ZodFirstPartyTypeKind.ZdzReal
+  | ZodFirstPartyTypeKind.ZdzDoublePrecision;
+
+export const isZdzKind = (kind: ZodFirstPartyTypeKind): kind is ZdzKinds => {
+  return (
+    kind === ZodFirstPartyTypeKind.ZdzText ||
+    kind === ZodFirstPartyTypeKind.ZdzVarchar ||
+    kind === ZodFirstPartyTypeKind.ZdzChar ||
+    kind === ZodFirstPartyTypeKind.ZdzInt ||
+    kind === ZodFirstPartyTypeKind.ZdzSmallInt ||
+    kind === ZodFirstPartyTypeKind.ZdzBigInt ||
+    kind === ZodFirstPartyTypeKind.ZdzSerial ||
+    kind === ZodFirstPartyTypeKind.ZdzSmallSerial ||
+    kind === ZodFirstPartyTypeKind.ZdzBigSerial ||
+    kind === ZodFirstPartyTypeKind.ZdzDecimal ||
+    kind === ZodFirstPartyTypeKind.ZdzReal ||
+    kind === ZodFirstPartyTypeKind.ZdzDoublePrecision
+  );
+};
+export const zodNumberLikeKinds: ZodNumberLikeFirstPartyTypeKinds[] = [
+  ZodFirstPartyTypeKind.ZodNumber,
+  ZodFirstPartyTypeKind.ZdzInt,
+  ZodFirstPartyTypeKind.ZdzSmallInt,
+  ZodFirstPartyTypeKind.ZdzBigInt,
+  ZodFirstPartyTypeKind.ZdzSerial,
+  ZodFirstPartyTypeKind.ZdzSmallSerial,
+  ZodFirstPartyTypeKind.ZdzBigSerial,
+  ZodFirstPartyTypeKind.ZdzDecimal,
+  ZodFirstPartyTypeKind.ZdzReal,
+  ZodFirstPartyTypeKind.ZdzDoublePrecision,
+];
+
+export const zodStringLikeKinds: ZodStringLikeFirstPartyTypeKinds[] = [
+  ZodFirstPartyTypeKind.ZdzText,
+  ZodFirstPartyTypeKind.ZdzVarchar,
+  ZodFirstPartyTypeKind.ZdzChar,
+];
 export type ZodFirstPartySchemaTypes =
   | ZodString
   | ZodNumber
@@ -5450,11 +5892,87 @@ const optionalType = ZodOptional.create;
 const nullableType = ZodNullable.create;
 const preprocessType = ZodEffects.createWithPreprocess;
 const pipelineType = ZodPipeline.create;
-const ostring = () => stringType().optional();
-const onumber = () => numberType().optional();
+const ostring = () =>
+  stringType({ kind: ZodFirstPartyTypeKind.ZodString }).optional();
+const onumber = () =>
+  numberType({ kind: ZodFirstPartyTypeKind.ZodNumber }).optional();
 const oboolean = () => booleanType().optional();
 // Zdz declarations
-const textType = ZdzText.create;
+//
+// String-like declarations
+const zdzTextType = (
+  params: ZodStringLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzText> = {
+    kind: ZodFirstPartyTypeKind.ZdzText,
+  }
+) => ZdzText.create<ZodFirstPartyTypeKind.ZdzText>(params);
+
+const ZdzVarcharType = (
+  params: ZodStringLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzVarchar> = {
+    kind: ZodFirstPartyTypeKind.ZdzVarchar,
+  }
+) => ZdzVarchar.create<ZodFirstPartyTypeKind.ZdzVarchar>(params);
+const ZdzCharType = (
+  params: ZodStringLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzChar> = {
+    kind: ZodFirstPartyTypeKind.ZdzChar,
+  }
+) => ZdzChar.create<ZodFirstPartyTypeKind.ZdzChar>(params);
+
+//
+// Number-like declarations
+const ZdzIntType = (
+  params: ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzInt> = {
+    kind: ZodFirstPartyTypeKind.ZdzInt,
+  }
+) => ZdzInt.create<ZodFirstPartyTypeKind.ZdzInt>(params);
+
+const ZdzSmallIntType = (
+  params: ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzSmallInt> = {
+    kind: ZodFirstPartyTypeKind.ZdzSmallInt,
+  }
+) => ZdzSmallInt.create<ZodFirstPartyTypeKind.ZdzSmallInt>(params);
+
+const ZdzBigIntType = (
+  params: ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzBigInt> = {
+    kind: ZodFirstPartyTypeKind.ZdzBigInt,
+  }
+) => ZdzBigInt.create<ZodFirstPartyTypeKind.ZdzBigInt>(params);
+
+const ZdzSerialType = (
+  params: ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzSerial> = {
+    kind: ZodFirstPartyTypeKind.ZdzSerial,
+  }
+) => ZdzSerial.create<ZodFirstPartyTypeKind.ZdzSerial>(params);
+
+const ZdzSmallSerialType = (
+  params: ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzSmallSerial> = {
+    kind: ZodFirstPartyTypeKind.ZdzSmallSerial,
+  }
+) => ZdzSmallSerial.create<ZodFirstPartyTypeKind.ZdzSmallSerial>(params);
+
+const ZdzBigSerialType = (
+  params: ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzBigSerial> = {
+    kind: ZodFirstPartyTypeKind.ZdzBigSerial,
+  }
+) => ZdzBigSerial.create<ZodFirstPartyTypeKind.ZdzBigSerial>(params);
+
+const ZdzDecimalType = (
+  params: ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzDecimal> = {
+    kind: ZodFirstPartyTypeKind.ZdzDecimal,
+  }
+) => ZdzDecimal.create<ZodFirstPartyTypeKind.ZdzDecimal>(params);
+
+const ZdzRealType = (
+  params: ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzReal> = {
+    kind: ZodFirstPartyTypeKind.ZdzReal,
+  }
+) => ZdzReal.create<ZodFirstPartyTypeKind.ZdzReal>(params);
+
+const ZdzDoublePrecisionType = (
+  params: ZodNumberLikeBaseCreateParams<ZodFirstPartyTypeKind.ZdzDoublePrecision> = {
+    kind: ZodFirstPartyTypeKind.ZdzDoublePrecision,
+  }
+) =>
+  ZdzDoublePrecision.create<ZodFirstPartyTypeKind.ZdzDoublePrecision>(params);
 
 export const coerce = {
   string: ((arg) =>
@@ -5464,6 +5982,7 @@ export const coerce = {
       kind: ZodFirstPartyTypeKind.ZodString,
     })) as (typeof ZodString)["create"],
   number: ((arg) =>
+    arg &&
     ZodNumber.create({ ...arg, coerce: true })) as (typeof ZodNumber)["create"],
   boolean: ((arg) =>
     ZodBoolean.create({
@@ -5510,14 +6029,29 @@ export {
   strictObjectType as strictObject,
   stringType as string,
   symbolType as symbol,
-  // Zdz exports
-  textType as text,
   effectsType as transformer,
   tupleType as tuple,
   undefinedType as undefined,
   unionType as union,
   unknownType as unknown,
   voidType as void,
+  ZdzBigIntType as zdzBigInt,
+  ZdzBigSerialType as zdzBigSerial,
+  ZdzCharType as zdzChar,
+  ZdzDecimalType as zdzDecimal,
+  ZdzDoublePrecisionType as zdzDoublePrecision,
+  //
+  // Number exports
+  ZdzIntType as zdzInt,
+  ZdzRealType as zdzReal,
+  ZdzSerialType as zdzSerial,
+  ZdzSmallIntType as zdzSmallInt,
+  ZdzSmallSerialType as zdzSmallSerial,
+  // Zdz exports
+  //
+  // String exports
+  zdzTextType as zdzText,
+  ZdzVarcharType as zdzVarChar,
 };
 
 export const NEVER = INVALID as never;
